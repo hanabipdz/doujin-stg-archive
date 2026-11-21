@@ -171,6 +171,10 @@ nav a[aria-current="page"]{color:#8d3020;background:#eee4d5}
   'use strict';
 
   const data = JSON.parse(document.getElementById('archive-data').textContent);
+  const themeAliases = { fan: 'derivative', fanwork: 'derivative', other_fanwork: 'derivative', touhou_fanwork: 'derivative', official_derivative: 'derivative' };
+  for (const work of data.works) {
+    if (work.theme?.kind && themeAliases[work.theme.kind]) work.theme.kind = themeAliases[work.theme.kind];
+  }
   const app = document.getElementById('app');
   const globalSearch = document.getElementById('globalSearch');
   const workById = new Map(data.works.map(work => [work.id, work]));
@@ -181,7 +185,6 @@ nav a[aria-current="page"]{color:#8d3020;background:#eee4d5}
   const themeLabels = {
     original: '原创',
     derivative: '二次创作',
-    official_derivative: '东方官方合作',
     pending: '待考'
   };
   const imageKinds = {
@@ -314,7 +317,7 @@ nav a[aria-current="page"]{color:#8d3020;background:#eee4d5}
   }
 
   function statusPills(work) {
-    const a = work.availability || {type:'out_of_print',label:'未找到完整版下载',url:'',note:'暂无下载核查记录。'};
+    const a = work.availability || {type:'out_of_print',label:'未找到完整版资源',url:'',note:'暂无资源核查记录。'};
     const badges = [`<span class="status availability ${escape(a.type)}" title="${escape(a.note || a.label)}">${escape(a.label)}</span>`];
     return badges.join('');
   }
@@ -429,37 +432,40 @@ nav a[aria-current="page"]{color:#8d3020;background:#eee4d5}
   function normalizeMediaOptions(value) {
     const text = String(value || '').trim();
     const options = new Set();
-    if (/(?:cd|dvd|光盘|实体|压制)/i.test(text)) options.add('实体发行');
+    if (/(?:cd|dvd|光盘|实体|压制|\brom\b|\.gbc\b)/i.test(text)) options.add('实体发行');
     if (/(?:数字下载|数字版|数字发行|steam|zip|rar|下载|免费软件|共享软件|免费版|线上独立发表|线上免费发表|在线发布|免费网络发布|数字销售|补丁)/i.test(text)) options.add('数字发行/下载');
     if (/(?:浏览器|flash|web版|browser)/i.test(text)) options.add('浏览器/网页运行');
     if (/(?:iアプリ|iモード|s!アプリ|doja|功能手机)/i.test(text)) options.add('手机应用');
-    if (/(?:gbc\s*rom|\.gbc\b|rom数字数据)/i.test(text)) options.add('ROM数据');
     if (options.size === 0) options.add('发行方式待核');
     return [...options];
   }
   function workMedia(work) {
     return [...new Set((work.media || []).flatMap(normalizeMediaOptions))];
   }
+  const availabilityGroups = [
+    ['available', '完整版资源可获取', ['official_store', 'official_free', 'purchase', 'free_download', 'official_web']],
+    ['partial', '仅有试玩、补丁或未完成版', ['partial']],
+    ['in_development', '开发中 / 尚未发行', ['in_development']],
+    ['resource_pending', '资源状态待核', ['pending', 'limited', 'file', 'research']],
+    ['out_of_print', '未找到完整版资源', ['out_of_print']]
+  ];
+
   const vocab = {
     decade: [...new Set(data.works.map(work => work.year && Math.floor(work.year / 10) * 10).filter(Boolean))].sort().map(year => [String(year), year + ' 年代']),
-    availability: [['confirmed','已确认完整版下载'], ["official_store", "付费完整版下载"], ["official_free", "免费完整版下载"], ["official_web", "官方浏览器版"], ["partial", "仅见试玩、补丁或未完成版"], ["in_development", "未发售完整版"], ["pending", "完整版下载待核"], ["out_of_print", "未找到完整版下载"]],
-    circle: data.circles.filter(circle => circle.workCount).sort((a, b) => titleOrder.compare(a.name, b.name)).map(circle => [circle.id, circle.name]),
+    availability: availabilityGroups.filter(([value]) => data.works.some(work => matchesAvailability(work, value))).map(([value, label]) => [value, label]),
+    circle: data.circles.filter(circle => circle.workCount && data.works.some(work => work.circleId === circle.id)).sort((a, b) => titleOrder.compare(a.name, b.name)).map(circle => [circle.id, circle.name]),
     os: [...new Set(data.works.flatMap(workSystems))].sort().map(value => [value, value]),
     medium: [...new Set(data.works.flatMap(workMedia))].sort().map(value => [value, value]),
-    theme: Object.entries(themeLabels),
-    cover: Object.entries(imageKinds),
-    eventEvidence: [['confirmed', '正式收录（含已确认展会发表/体验版）'], ['event_published', '展会发表补录（含体验版）'], ['free_web_no_event', '免费网页下载：未见线下展会记录'], ['no_event_record', '暂无展会记录'], ['pending', '待核：已有展会线索，发表状态未确认']],
+    theme: Object.entries(themeLabels).filter(([value]) => data.works.some(work => work.theme?.kind === value)),
+    cover: Object.entries(imageKinds).filter(([value]) => data.works.some(work => value === 'with' ? !!work.cover : !work.cover)),
+    eventEvidence: [['confirmed', '正式收录（含展会已发表 / 体验版）'], ['free_web_no_event', '免费网页下载：暂无展会记录'], ['no_event_record', '暂无展会记录']].filter(([value]) => data.works.some(work => value === 'confirmed' ? isIncludedInFormalCollection(work) : value === 'free_web_no_event' ? hasFreeWebReleaseWithoutEvent(work) : hasNoEventRecord(work))),
     sort: [['recent', '年份（新到旧）'], ['older', '年份（旧到新）'], ['name', '作品名'], ['circle', '社团名'], ['original', '原清单顺序']]
   };
 
   function matchesAvailability(work, selected) {
     if (!selected) return true;
-    const type = work.availability?.type;
-    if (selected === 'confirmed') return ['official_store', 'official_free', 'purchase', 'free_download'].includes(type);
-    if (selected === 'official_store') return ['official_store', 'purchase'].includes(type);
-    if (selected === 'official_free') return ['official_free', 'free_download'].includes(type);
-    if (selected === 'pending') return ['pending', 'limited', 'file'].includes(type);
-    return type === selected;
+    const group = availabilityGroups.find(([value]) => value === selected);
+    return !!group && group[2].includes(work.availability?.type);
   }
 
   function hasConfirmedEventPublication(work) {
@@ -483,22 +489,11 @@ nav a[aria-current="page"]{color:#8d3020;background:#eee4d5}
     const description = `${availability.label || ''} ${availability.note || ''}`;
     const downloadableForFree = ['official_free', 'free_download'].includes(type) ||
       (type === 'official_web' && /免费.*(?:zip|下载)/i.test(description));
-    const evidence = work.eventEvidence;
-    return downloadableForFree && !isIncludedInFormalCollection(work) &&
-      evidence?.status !== 'confirmed' && !hasConfirmedEventPublication(work) &&
-      (!Array.isArray(evidence?.events) || evidence.events.length === 0);
+    return downloadableForFree && !isIncludedInFormalCollection(work);
   }
 
   function hasNoEventRecord(work) {
-    const evidence = work.eventEvidence || {};
-    const events = Array.isArray(evidence.events) ? evidence.events : [];
-    return !isIncludedInFormalCollection(work) && events.length === 0;
-  }
-
-  function hasUnconfirmedEventRecord(work) {
-    const evidence = work.eventEvidence || {};
-    return !isIncludedInFormalCollection(work) && !hasFreeWebReleaseWithoutEvent(work) &&
-      Array.isArray(evidence.events) && evidence.events.length > 0;
+    return !isIncludedInFormalCollection(work);
   }
 
   function applyFilters(state) {
@@ -506,7 +501,7 @@ nav a[aria-current="page"]{color:#8d3020;background:#eee4d5}
       return (!state.q || matches(state.q, indexedWorks.get(work.id))) &&
         (!state.decade || String(Math.floor(work.year / 10) * 10) === state.decade) &&
         (!state.circle || state.circle === work.circleId) &&
-        (!state.eventEvidence || (state.eventEvidence === 'confirmed' ? isIncludedInFormalCollection(work) : state.eventEvidence === 'event_published' ? work.formalDoujin !== true && hasConfirmedEventPublication(work) : state.eventEvidence === 'free_web_no_event' ? hasFreeWebReleaseWithoutEvent(work) : state.eventEvidence === 'no_event_record' ? hasNoEventRecord(work) : hasUnconfirmedEventRecord(work))) &&
+        (!state.eventEvidence || (state.eventEvidence === 'confirmed' ? isIncludedInFormalCollection(work) : state.eventEvidence === 'free_web_no_event' ? hasFreeWebReleaseWithoutEvent(work) : hasNoEventRecord(work))) &&
         matchesAvailability(work, state.availability) &&
         (!state.os || workSystems(work).includes(state.os)) &&
         (!state.medium || workMedia(work).includes(state.medium)) &&
@@ -535,7 +530,10 @@ nav a[aria-current="page"]{color:#8d3020;background:#eee4d5}
     const state = { ...defaults };
     for (const key of Object.keys(defaults)) {
       const rawValue = search.get(key);
-      const value = key === 'availability' && rawValue === 'resource' ? 'pending' : rawValue;
+      const availabilityAliases = { resource: 'resource_pending', confirmed: 'available', official_store: 'available', official_free: 'available', purchase: 'available', free_download: 'available', official_web: 'available', pending: 'resource_pending', limited: 'resource_pending', file: 'resource_pending', research: 'resource_pending' };
+      const eventAliases = { event_published: 'confirmed', pending: 'no_event_record' };
+      const themeAlias = themeAliases[rawValue] || rawValue;
+      const value = key === 'availability' ? (availabilityAliases[rawValue] || rawValue) : key === 'eventEvidence' ? (eventAliases[rawValue] || rawValue) : key === 'theme' ? themeAlias : rawValue;
       if (value && (!vocab[key] || vocab[key].some(entry => entry[0] === value))) state[key] = value;
     }
     homeHref = homeUrl(state);
@@ -544,12 +542,12 @@ nav a[aria-current="page"]{color:#8d3020;background:#eee4d5}
     app.innerHTML = `<section class="hero"><h1>同人射击游戏档案</h1>
       <div class="stats"><div class="stat"><b>${data.works.filter(work=>isIncludedInFormalCollection(work)).length}</b><span>正式收录（含展会已发表）</span></div>
       <div class="stat"><b>${data.works.length-data.works.filter(work=>isIncludedInFormalCollection(work)).length}</b><span>尚未正式收录</span></div>
-      <div class="stat"><b>${data.circles.length}</b><span>社团与组织</span></div></div><p class="source-intro">资料库共保存 ${data.works.length} 条作品研究记录；默认只显示已有具体线下展会产出证据的正式收录作品，涵盖弹幕射击、计时挑战和含 RPG 要素的闯关射击。待核记录可在“正式收录资格”筛选中查看，不计入正式同人数量。</p></section>
+      <div class="stat"><b>${data.circles.length}</b><span>社团与组织</span></div></div><p class="source-intro">资料库共保存 ${data.works.length} 条作品研究记录；默认只显示已有具体线下展会产出证据的正式收录作品，涵盖弹幕射击、计时挑战和含 RPG 要素的闯关射击。暂无已确认展会发表记录的作品可在“暂无展会记录”选项中查看；仅有免费网页资源的作品另设筛选。</p></section>
       <form class="filters catalog-filters" role="search" id="catalog-filters">
       <label class="wide"><span>作品名、社团、别名或关键词</span><input name="q" type="search" value="${escape(state.q)}" autocomplete="off" placeholder="例如 八重、RefRain、C80"></label>
       ${optionList('eventEvidence','正式收录/展会记录',state)}${optionList('decade','年代',state)}${optionList('circle','社团',state)}
       ${optionList('os','OS / 平台',state)}${optionList('medium','媒介',state)}
-      ${optionList('availability','完整版下载',state)}${optionList('theme','题材',state)}
+      ${optionList('availability','资源状态',state)}${optionList('theme','题材',state)}
       ${optionList('cover','封面',state)}${optionList('sort','排序',state)}
       <button type="submit" class="btn">搜索</button><button type="button" id="clear-filters" class="btn">清除</button></form>
       <div id="work-results"><div id="result-count" class="resultline" aria-live="polite"></div><div id="work-grid"></div><nav class="pagination" id="work-pages" aria-label="作品分页"></nav></div>`;
@@ -657,7 +655,7 @@ nav a[aria-current="page"]{color:#8d3020;background:#eee4d5}
         <dl class="facts">
         ${fact('发表 / 发售', escape(work.release))}${fact('制作人 / 社团', work.developerCredit ? escape(work.developerCredit) + ' · ' + circleAnchor(circle) : circleAnchor(circle))}
         ${fact('适用 OS', escape(work.supportedOS.join(' · ')))}${fact('主机平台', escape(work.platforms.join(' · ')))}
-        ${fact('发行媒介', escape(work.media.join(' · ')))}${fact('完整版下载', `${escape(availability?.label || '未找到完整版下载')}${downloadLink}<br><small>${escape(availability?.note || '')}</small>`)}
+        ${fact('发行媒介', escape(work.media.join(' · ')))}${fact('资源状态', `${escape(availability?.label || '未找到完整版资源')}${downloadLink}<br><small>${escape(availability?.note || '')}</small>`)}
         ${acquisitionReferences ? fact('获取线索与版本资料', `<ul>${acquisitionReferences}</ul>`) : ''}
         ${work.downloadCheck ? fact('入口实查',
           `<b>${escape(work.downloadCheck.label || work.downloadCheck.result)}</b> · ${escape(work.downloadCheck.date)}<br>${escape(work.downloadCheck.detail || work.downloadCheck.note)}`) : ''}
@@ -842,14 +840,12 @@ nav a[aria-current="page"]{color:#8d3020;background:#eee4d5}
       <p>已补录 ${data.meta.coverCount} 张配图，包括实体封面、制作者发布图、官方商店图和 DoujinStyle 配图。版权归各权利人。图片与作品目录可离线浏览，打开出处需要联网。${external('https://diarywind.com/doujinstg/', 'Doujin STG collection')}</p>
       <p>在<a href="#/resources">同人资源站</a>可以查站外的档案、发行平台、展会名录和本轮补充的作者入口。</p>
       <p>同人资源站只展示本站整理的档案、发行平台、展会名录与作者入口；作品简介和引用来源保留在对应作品详情。</p>
-      ${section('完整版下载状态', '<div class="legend-grid">' + [
-        ['付费完整版下载', '可购买对应作品的完整数字游戏。'],
-        ['免费完整版下载', '制作方或其发布平台提供完整游戏的下载入口。'],
-        ['官方浏览器版', '制作方发布的网页复刻或网页版。'],
-        ['仅见试玩、补丁或未完成版', '目前核实到的可下载文件属于试玩、更新包、习作或未完成发行版本。'],
-        ['未发售完整版', '制作方或商店资料显示作品仍在开发或尚未发行。'],
-        ['完整版下载待核', '已有资料、历史包或商店线索，还需查证对应版本和当前下载状态。'],
-        ['未找到完整版下载', '现有资料未找到已确认的完整数字版本入口。实体资料仍可在作品详情查看。'],
+      ${section('资源状态说明', '<div class="legend-grid">' + [
+        ['完整版资源可获取', '完整游戏可通过购买、免费数字包或官方浏览器版使用；具体形式与来源见作品详情。'],
+        ['仅有试玩、补丁或未完成版', '目前只核实到试玩、更新包、习作或未完成发行版本。'],
+        ['开发中 / 尚未发行', '制作方或商店资料显示作品仍在开发或尚未发行。'],
+        ['资源状态待核', '已有网页、商店或文件线索，但完整本体或当前资源入口尚未核实。'],
+        ['未找到完整版资源', '现有资料未找到可确认的完整游戏资源入口；实体发行信息仍可在作品详情查看。'],
       ].map(([name, desc]) => `<div class="legend-card"><div><b>${escape(name)}</b><p>${escape(desc)}</p></div></div>`).join('') + '</div>')}
       <p><b>题材</b>　原创作品以自创设定为基础。作者或其团队修改、重制或延伸自身的原创旧作，归「原创」。二次创作基于他人的作品、角色或世界观进行改编或衍生，改版时沿用该题材。玩法借鉴和客串按主体题材归类。资料不足的条目标为「待考」。</p>
       <p>作品卡片右上角标注 R18、R18 DLC 或 R18 待核。实体复核展示 ${escape(data.meta.updated)} 的附表记录。</p></section>`;
